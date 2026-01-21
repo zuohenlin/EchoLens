@@ -1,0 +1,3 @@
+[submodule "third_party/Adsim-Insight"]
+	path = third_party/Adsim-Insight
+	url = git@github.com:zuohenlin/Adsim-Insight.git
