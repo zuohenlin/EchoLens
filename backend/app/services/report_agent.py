@@ -13,7 +13,9 @@ import os
 import json
 import time
 import re
-from typing import Dict, Any, List, Optional, Callable
+import csv
+from io import StringIO
+from typing import Dict, Any, List, Optional, Callable, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -239,7 +241,8 @@ class ReportLogger:
         section_index: int,
         content: str,
         tool_calls_count: int,
-        is_subsection: bool = False
+        is_subsection: bool = False,
+        metrics: Optional[Dict[str, Any]] = None # 新增 metrics 参数
     ):
         """记录章节/子章节内容生成完成（仅记录内容，不代表整个章节完成）"""
         action = "subsection_content" if is_subsection else "section_content"
@@ -253,6 +256,7 @@ class ReportLogger:
                 "content_length": len(content),
                 "tool_calls_count": tool_calls_count,
                 "is_subsection": is_subsection,
+                "metrics": metrics, # 记录 metrics
                 "message": f"{'子章节' if is_subsection else '主章节'} {section_title} 内容生成完成"
             }
         )
@@ -262,11 +266,13 @@ class ReportLogger:
         section_title: str,
         section_index: int,
         full_content: str,
-        subsection_count: int
+        subsection_count: int,
+        section_metrics: Optional[Dict[str, Any]] = None, # 新增主章节指标
+        subsection_metrics_list: Optional[List[Dict[str, Any]]] = None # 新增子章节指标列表
     ):
         """
         记录完整章节生成完成（包含所有子章节的合并内容）
-        
+
         前端应监听此日志来判断一个章节是否真正完成，并获取完整内容
         """
         self.log(
@@ -278,6 +284,8 @@ class ReportLogger:
                 "content": full_content,  # 完整章节内容（含子章节），不截断
                 "content_length": len(full_content),
                 "subsection_count": subsection_count,
+                "section_metrics": section_metrics, # 记录主章节指标
+                "subsection_metrics_list": subsection_metrics_list, # 记录子章节指标列表
                 "message": f"章节 {section_title} 完整生成完成（含 {subsection_count} 个子章节）"
             }
         )
@@ -405,19 +413,34 @@ class ReportSection:
     title: str
     content: str = ""
     subsections: List['ReportSection'] = field(default_factory=list)
-    
+    metrics: Dict[str, Any] = field(default_factory=dict) # 新增量化指标字段
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "title": self.title,
             "content": self.content,
-            "subsections": [s.to_dict() for s in self.subsections]
+            "subsections": [s.to_dict() for s in self.subsections],
+            "metrics": self.metrics # 包含metrics
         }
-    
+
     def to_markdown(self, level: int = 2) -> str:
         """转换为Markdown格式"""
         md = f"{'#' * level} {self.title}\n\n"
         if self.content:
             md += f"{self.content}\n\n"
+        # 插入指标部分 (如果存在)
+        if self.metrics:
+            md += f"**关键指标:**\n\n"
+            for key, value in self.metrics.items():
+                if isinstance(value, dict): # 如果是嵌套字典，尝试格式化为JSON
+                    md += f"- {key}: ```json\n{json.dumps(value, ensure_ascii=False, indent=2)}\n```\n"
+                elif isinstance(value, (list, tuple)): # 如果是列表，尝试格式化为Markdown列表
+                     md += f"- {key}:\n"
+                     for item in value:
+                         md += f"  - {item}\n"
+                else:
+                    md += f"- {key}: {value}\n"
+            md += "\n"
         for sub in self.subsections:
             md += sub.to_markdown(level + 1)
         return md
@@ -456,10 +479,11 @@ class Report:
     status: ReportStatus
     outline: Optional[ReportOutline] = None
     markdown_content: str = ""
+    metrics: Dict[str, Any] = field(default_factory=dict) # 新增报告汇总指标
     created_at: str = ""
     completed_at: str = ""
     error: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "report_id": self.report_id,
@@ -469,6 +493,7 @@ class Report:
             "status": self.status.value,
             "outline": self.outline.to_dict() if self.outline else None,
             "markdown_content": self.markdown_content,
+            "metrics": self.metrics, # 包含metrics
             "created_at": self.created_at,
             "completed_at": self.completed_at,
             "error": self.error
@@ -805,6 +830,20 @@ class ReportAgent:
                 desc_parts.append(f"  参数: {params_desc}")
         return "\n".join(desc_parts)
     
+    def _parse_section_metrics(self, response: str) -> Dict[str, Any]:
+        """
+        从LLM响应中解析 <section_metrics> 标签内的JSON数据
+        """
+        metrics_pattern = r'<section_metrics>\s*(\{.*?\})\s*</section_metrics>'
+        match = re.search(metrics_pattern, response, re.DOTALL)
+        if match:
+            try:
+                metrics_json = match.group(1)
+                return json.loads(metrics_json)
+            except json.JSONDecodeError as e:
+                logger.warning(f"无法解析 <section_metrics> 中的 JSON: {e}")
+        return {}
+
     def plan_outline(
         self, 
         progress_callback: Optional[Callable] = None
@@ -951,13 +990,13 @@ class ReportAgent:
             )
     
     def _generate_section_react(
-        self, 
+        self,
         section: ReportSection,
         outline: ReportOutline,
         previous_sections: List[str],
         progress_callback: Optional[Callable] = None,
         section_index: int = 0
-    ) -> str:
+    ) -> Tuple[str, Dict[str, Any]]: # 修改返回类型为元组 (str, Dict[str, Any])
         """
         使用ReACT模式生成单个章节内容
         
@@ -1023,11 +1062,21 @@ class ReportAgent:
    - 禁止使用你自己的知识来编写报告内容
    - 每个章节至少调用2次工具（最多4次）来观察模拟的世界，它代表了未来
 
-2. 【必须引用Agent的原始言行】
+2. 【必须引用Agent的原始言行与量化数据】
    - Agent的发言和行为是对未来人群行为的预测
+   - 量化数据（如参与Agent数量、互动量、情绪分布等）是预测效果的直观体现
    - 在报告中使用引用格式展示这些预测，例如：
      > "某类人群会表示：原文内容..."
-   - 这些引用是模拟预测的核心证据
+   - 同时，使用表格、列表或直接引用的方式，清晰呈现关键量化数据：
+     - **例1 (列表)**:
+       - 情绪分布：正面 60%，中立 20%，负面 20%
+       - 关键Agent互动量：Agent A 120次，Agent B 85次
+     - **例2 (表格)**:
+       | 平台   | 互动量 | 传播广度 |
+       | ------ | ------ | -------- |
+       | 微博   | 1200   | 10万人次 |
+       | 小红书 | 800    | 5万人次  |
+   - 这些引用和量化数据是模拟预测的核心证据
 
 3. 【忠实呈现预测结果】
    - 报告内容必须反映模拟世界中的代表未来的模拟结果
@@ -1124,9 +1173,30 @@ class ReportAgent:
    ```
    校方的回应被认为缺乏实质内容。> "校方的应对模式..." 这一评价反映了...
    ```
-5. 保持与其他章节的逻辑连贯性
-6. 【避免重复】仔细阅读下方已完成的章节内容，不要重复描述相同的信息
-7. 【再次强调】不要添加任何标题！用**粗体**代替小节标题"""
+5. 【量化指标输出格式 - 必须！】
+   - 除了正文内容，如果当前章节有任何可量化的关键指标，必须在Final Answer之前，使用 <section_metrics> 标签输出JSON格式的指标数据。
+   - 每个章节输出的 metrics 应该只包含与该章节主题直接相关的量化数据。
+   - 示例：
+     ```json
+     <section_metrics>
+     {
+       "sentiment_distribution": {
+         "positive": "60%",
+         "neutral": "20%",
+         "negative": "20%"
+       },
+       "top_kols": [
+         {"name": "Agent_A", "influence_score": 9.5},
+         {"name": "Agent_B", "influence_score": 8.8}
+       ],
+       "total_interactions_count": 12000
+     }
+     </section_metrics>
+     ```
+   - 如果没有明确的量化指标，则不需要输出此标签。
+   - 标签必须独立成行，前后不能有其他文本。
+
+【再次强调】不要添加任何标题！用**粗体**代替小节标题"""
 
         # 构建用户prompt - 每个已完成章节各传入最大4000字
         if previous_sections:
@@ -1226,10 +1296,15 @@ class ReportAgent:
                     })
                     continue
                 
-                # 提取最终答案
-                final_answer = response.split("Final Answer:")[-1].strip()
-                logger.info(f"章节 {section.title} 生成完成（工具调用: {tool_calls_count}次）")
-                
+                # 提取量化指标
+                extracted_metrics = self._parse_section_metrics(response)
+
+                # 提取最终答案，并移除metrics标签
+                final_answer_raw = response.split("Final Answer:")[-1].strip()
+                final_answer = re.sub(r'<section_metrics>.*?</section_metrics>', '', final_answer_raw, flags=re.DOTALL).strip()
+
+                logger.info(f"章节 {section.title} 生成完成（工具调用: {tool_calls_count}次），提取到 {len(extracted_metrics)} 个指标")
+
                 # 记录章节内容生成完成日志（注意：这只是内容完成，不代表整个章节完成）
                 # 如果是子章节，section_index >= 100
                 is_subsection = section_index >= 100
@@ -1239,10 +1314,11 @@ class ReportAgent:
                         section_index=section_index,
                         content=final_answer,
                         tool_calls_count=tool_calls_count,
-                        is_subsection=is_subsection
+                        is_subsection=is_subsection,
+                        metrics=extracted_metrics # 新增 metrics
                     )
-                
-                return final_answer
+
+                return final_answer, extracted_metrics
             
             # 解析工具调用
             tool_calls = self._parse_tool_calls(response)
@@ -1481,24 +1557,26 @@ class ReportAgent:
                     )
                 
                 # 生成主章节内容
-                section_content = self._generate_section_react(
+                section_content, section_metrics = self._generate_section_react(
                     section=section,
                     outline=outline,
                     previous_sections=generated_sections,
                     progress_callback=lambda stage, prog, msg:
                         progress_callback(
-                            stage, 
+                            stage,
                             base_progress + int(prog * 0.7 / total_sections),
                             msg
                         ) if progress_callback else None,
                     section_index=section_num
                 )
-                
+
                 section.content = section_content
+                section.metrics = section_metrics # 存储章节指标
                 generated_sections.append(f"## {section.title}\n\n{section_content}")
-                
+
                 # 如果有子章节，也一并生成并合并到主章节中
                 subsection_contents = []
+                subsection_metrics_list = [] # 收集子章节指标
                 for j, subsection in enumerate(section.subsections):
                     subsection_num = j + 1
                     
@@ -1517,7 +1595,7 @@ class ReportAgent:
                         completed_sections=completed_section_titles
                     )
                     
-                    subsection_content = self._generate_section_react(
+                    subsection_content, subsection_metrics = self._generate_section_react(
                         section=subsection,
                         outline=outline,
                         previous_sections=generated_sections,
@@ -1525,8 +1603,10 @@ class ReportAgent:
                         section_index=section_num * 100 + subsection_num  # 子章节索引
                     )
                     subsection.content = subsection_content
+                    subsection.metrics = subsection_metrics # 存储子章节指标
                     generated_sections.append(f"### {subsection.title}\n\n{subsection_content}")
                     subsection_contents.append((subsection.title, subsection_content))
+                    subsection_metrics_list.append(subsection_metrics) # 收集子章节指标
                     completed_section_titles.append(f"  └─ {subsection.title}")
                     
                     logger.info(f"子章节已生成: {subsection.title}")
@@ -1536,32 +1616,60 @@ class ReportAgent:
                     report_id, section_num, section, subsection_contents
                 )
                 completed_section_titles.append(section.title)
-                
+
                 # 【重要】记录完整章节完成日志，包含合并后的完整内容
                 # 构建完整章节内容（主章节 + 所有子章节）
                 full_section_content = f"## {section.title}\n\n{section_content}\n\n"
                 for sub_title, sub_content in subsection_contents:
                     full_section_content += f"### {sub_title}\n\n{sub_content}\n\n"
-                
+
                 if self.report_logger:
                     self.report_logger.log_section_full_complete(
                         section_title=section.title,
                         section_index=section_num,
                         full_content=full_section_content.strip(),
-                        subsection_count=len(subsection_contents)
+                        subsection_count=len(subsection_contents),
+                        section_metrics=section.metrics, # 添加主章节指标
+                        subsection_metrics_list=subsection_metrics_list # 添加子章节指标列表
                     )
-                
+
                 logger.info(f"章节已保存（包含{len(subsection_contents)}个子章节）: {report_id}/section_{section_num:02d}.md")
-                
+
                 # 更新进度
                 ReportManager.update_progress(
-                    report_id, "generating", 
+                    report_id, "generating",
                     base_progress + int(70 / total_sections),
                     f"章节 {section.title} 已完成",
                     current_section=None,
                     completed_sections=completed_section_titles
                 )
+
+            # 汇总所有章节的指标
+            all_section_metrics = {}
+            for i, section in enumerate(outline.sections):
+                all_section_metrics[f"section_{i+1}_{section.title}"] = section.metrics
+                for j, sub in enumerate(section.subsections):
+                    all_section_metrics[f"section_{i+1}_sub_{j+1}_{sub.title}"] = sub.metrics
             
+            # 生成商业量化指标
+            if progress_callback:
+                progress_callback("generating", 90, "正在生成商业量化指标...")
+            
+            ReportManager.update_progress(
+                report_id, "generating", 90, "正在生成商业量化指标...",
+                completed_sections=completed_section_titles
+            )
+            
+            business_metrics = self._generate_business_metrics(
+                simulation_requirement=self.simulation_requirement,
+                all_section_metrics=all_section_metrics,
+                outline=outline
+            )
+            
+            # 将商业指标和章节指标合并，或者直接使用商业指标
+            report.metrics = business_metrics
+            report.metrics["_section_metrics"] = all_section_metrics
+
             # 阶段3: 组装完整报告
             if progress_callback:
                 progress_callback("generating", 95, "正在组装完整报告...")
@@ -1631,6 +1739,82 @@ class ReportAgent:
             
             return report
     
+    def _generate_business_metrics(
+        self, 
+        simulation_requirement: str, 
+        all_section_metrics: Dict[str, Any],
+        outline: ReportOutline
+    ) -> Dict[str, Any]:
+        """
+        生成商业量化指标
+        """
+        logger.info("开始推演商业量化指标...")
+        
+        system_prompt = """你是一个顶级的商业数据分析师和电商操盘手。你的任务是根据给定的舆情数据和分析报告，推演出具有说服力的商业量化指标。
+
+【输入数据来源】
+- 用户查询/分析目标
+- 基础舆情数据摘要（各章节指标）
+
+【输出要求】
+你必须返回一个严格的 JSON 对象，包含以下字段。对于无法精确计算的指标，请基于你的专业经验给出一个【合理的预估值】或【推演区间】，切忌留空。
+
+JSON 格式要求：
+{
+    "estimated_exposure": "预估总曝光量，如 '120万+'",
+    "conversion_intent_rate": "种草/转化意向率百分比，如 '8.5%'",
+    "saved_pr_cost_wan": "潜在节省的公关成本（万元），如 '15.5'",
+    "estimated_roi": "预估营销ROI，如 '1:3.5'",
+    "sentiment_positive_rate": "正面情绪占比百分比，如 '65%'",
+    "sentiment_negative_rate": "负面情绪占比百分比，如 '12%'"
+}
+
+【推演逻辑参考（你在内部思考时使用，不要输出）】
+- 曝光量 = 抓取到的帖子阅读/播放量总和的放大预估
+- 转化意向 = (正面评论 + 询问购买链接的评论) / 总评论数
+- 节省公关成本 = 提前发现中高危负面帖子 * 历史处理每个帖子的平均成本
+- ROI = 预估带来的新增销售额 / 营销投入成本
+"""
+
+        # 提取各章节的指标摘要
+        metrics_summary = json.dumps(all_section_metrics, ensure_ascii=False)[:3000]
+        
+        user_prompt = f"""
+请基于以下信息，推演本次事件/活动的商业量化指标。
+
+分析目标 (Query):
+{simulation_requirement}
+
+各章节指标摘要:
+{metrics_summary}
+
+请返回符合系统提示词要求的 JSON 数据。
+"""
+        try:
+            response = self.llm.chat(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            
+            metrics = json.loads(response)
+            logger.info(f"商业量化指标推演成功: {metrics}")
+            return metrics
+            
+        except Exception as e:
+            logger.error(f"商业量化指标推演失败: {str(e)}")
+            return {
+                "estimated_exposure": "数据不足，暂无预估",
+                "conversion_intent_rate": "N/A",
+                "saved_pr_cost_wan": "0",
+                "estimated_roi": "N/A",
+                "sentiment_positive_rate": "N/A",
+                "sentiment_negative_rate": "N/A"
+            }
+
     def chat(
         self, 
         message: str,
@@ -1894,16 +2078,92 @@ class ReportManager:
     def get_console_log_stream(cls, report_id: str) -> List[str]:
         """
         获取完整的控制台日志（一次性获取全部）
-        
+
         Args:
             report_id: 报告ID
-            
+
         Returns:
             日志行列表
         """
         result = cls.get_console_log(report_id, from_line=0)
         return result["logs"]
-    
+
+    @classmethod
+    def get_report_metrics(cls, report_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取报告的汇总量化指标
+
+        Args:
+            report_id: 报告ID
+
+        Returns:
+            Dict[str, Any]: 报告的汇总量化指标，如果报告不存在则返回 None。
+        """
+        report = cls.get_report(report_id)
+        if report:
+            return report.metrics
+        return None
+
+    @classmethod
+    def export_report_metrics_to_csv(cls, report_id: str) -> Optional[str]:
+        """
+        将报告的汇总量化指标导出为 CSV 格式字符串。
+        如果指标是嵌套的，会尝试展平。
+
+        Args:
+            report_id: 报告ID
+
+        Returns:
+            str: CSV 格式的字符串，如果报告不存在或没有指标则返回 None。
+        """
+        metrics = cls.get_report_metrics(report_id)
+        if not metrics:
+            return None
+
+        output = StringIO()
+        writer = csv.writer(output)
+
+        # 简单展平嵌套字典
+        def flatten_dict(d, parent_key='', sep='_'):
+            items = []
+            for k, v in d.items():
+                new_key = parent_key + sep + k if parent_key else k
+                if isinstance(v, dict):
+                    items.extend(flatten_dict(v, new_key, sep=sep).items())
+                elif isinstance(v, list):
+                    # 列表项转换为字符串
+                    items.append((new_key, json.dumps(v, ensure_ascii=False)))
+                else:
+                    items.append((new_key, v))
+            return dict(items)
+
+        flattened_metrics = flatten_dict(metrics)
+
+        if not flattened_metrics:
+            return None
+
+        headers = list(flattened_metrics.keys())
+        writer.writerow(headers)
+        writer.writerow([flattened_metrics.get(h, '') for h in headers])
+
+        return output.getvalue()
+
+    @classmethod
+    def export_report_metrics_to_json(cls, report_id: str) -> Optional[str]:
+        """
+        将报告的汇总量化指标导出为 JSON 格式字符串。
+
+        Args:
+            report_id: 报告ID
+
+        Returns:
+            str: JSON 格式的字符串，如果报告不存在或没有指标则返回 None。
+        """
+        metrics = cls.get_report_metrics(report_id)
+        if not metrics:
+            return None
+        return json.dumps(metrics, ensure_ascii=False, indent=2)
+
     @classmethod
     def get_agent_log(cls, report_id: str, from_line: int = 0) -> Dict[str, Any]:
         """
@@ -2439,7 +2699,7 @@ class ReportManager:
             if os.path.exists(full_report_path):
                 with open(full_report_path, 'r', encoding='utf-8') as f:
                     markdown_content = f.read()
-        
+
         return Report(
             report_id=data['report_id'],
             simulation_id=data['simulation_id'],
@@ -2448,6 +2708,7 @@ class ReportManager:
             status=ReportStatus(data['status']),
             outline=outline,
             markdown_content=markdown_content,
+            metrics=data.get('metrics', {}), # 加载 metrics 字段
             created_at=data.get('created_at', ''),
             completed_at=data.get('completed_at', ''),
             error=data.get('error')

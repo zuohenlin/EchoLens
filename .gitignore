@@ -74,3 +74,14 @@ third_party/EchoLens-Insight-Data/insight_engine_streamlit_reports/
 third_party/EchoLens-Insight-Data/media_engine_streamlit_reports/
 third_party/EchoLens-Insight-Data/query_engine_streamlit_reports/
 third_party/EchoLens-Insight-Data/db_data/
+
+# AI 工具配置
+.claude/
+CLAUDE.md
+.spec-workflow/
+.gemini/
+
+# 本地参考文档
+指南.docx
+指南.md
+EchoLens三创赛专项优化阶段性总结与前端交接文档.md

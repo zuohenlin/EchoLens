@@ -8,11 +8,11 @@
           Github主页 <span class="arrow">↗</span>
         </a>
         <span class="nav-divider">|</span>
-        <a href="https://github.com/666ghj/EchoLens" target="_blank" class="github-link ref-link">
-          上游: EchoLens (EchoLens) <span class="arrow">↗</span>
+        <a href="https://github.com/666ghj/MiroFish" target="_blank" class="github-link ref-link">
+          上游: MiroFish (EchoLens) <span class="arrow">↗</span>
         </a>
-        <a href="https://github.com/zuohenlin/EchoLens-Insight" target="_blank" class="github-link ref-link">
-          上游: EchoLens-Insight (EchoLens-Insight) <span class="arrow">↗</span>
+        <a href="https://github.com/666ghj/BettaFish" target="_blank" class="github-link ref-link">
+          上游: BettaFish (EchoLens-Insight) <span class="arrow">↗</span>
         </a>
       </div>
     </nav>

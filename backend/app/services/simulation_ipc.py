@@ -27,6 +27,10 @@ class CommandType(str, Enum):
     INTERVIEW = "interview"           # 单个Agent采访
     BATCH_INTERVIEW = "batch_interview"  # 批量采访
     CLOSE_ENV = "close_env"           # 关闭环境
+    PAUSE_SIMULATION = "pause_simulation"     # 暂停模拟
+    RESUME_SIMULATION = "resume_simulation"   # 恢复模拟
+    INJECT_EVENT = "inject_event"           # 注入事件
+    UPDATE_AGENT_PARAM = "update_agent_param"   # 更新Agent参数
 
 
 class CommandStatus(str, Enum):
@@ -267,6 +271,76 @@ class SimulationIPCClient:
             timeout=timeout
         )
     
+    def send_close_env(self, timeout: float = 30.0) -> IPCResponse:
+        """
+        发送关闭环境命令
+
+        Args:
+            timeout: 超时时间
+
+        Returns:
+            IPCResponse
+        """
+        return self.send_command(
+            command_type=CommandType.CLOSE_ENV,
+            args={},
+            timeout=timeout
+        )
+
+    def send_pause_simulation(self, timeout: float = 30.0) -> IPCResponse:
+        """
+        发送暂停模拟命令
+        """
+        return self.send_command(
+            command_type=CommandType.PAUSE_SIMULATION,
+            args={},
+            timeout=timeout
+        )
+
+    def send_resume_simulation(self, timeout: float = 30.0) -> IPCResponse:
+        """
+        发送恢复模拟命令
+        """
+        return self.send_command(
+            command_type=CommandType.RESUME_SIMULATION,
+            args={},
+            timeout=timeout
+        )
+
+    def send_inject_event(self, event_data: Dict[str, Any], timeout: float = 60.0) -> IPCResponse:
+        """
+        发送注入事件命令
+
+        Args:
+            event_data: 事件数据，包含事件类型、内容等
+            timeout: 超时时间
+        """
+        return self.send_command(
+            command_type=CommandType.INJECT_EVENT,
+            args={"event_data": event_data},
+            timeout=timeout
+        )
+
+    def send_update_agent_param(self, agent_id: int, param_name: str, param_value: Any, timeout: float = 60.0) -> IPCResponse:
+        """
+        发送更新Agent参数命令
+
+        Args:
+            agent_id: Agent ID
+            param_name: 参数名称
+            param_value: 参数值
+            timeout: 超时时间
+        """
+        return self.send_command(
+            command_type=CommandType.UPDATE_AGENT_PARAM,
+            args={
+                "agent_id": agent_id,
+                "param_name": param_name,
+                "param_value": param_value
+            },
+            timeout=timeout
+        )
+
     def check_env_alive(self) -> bool:
         """
         检查模拟环境是否存活

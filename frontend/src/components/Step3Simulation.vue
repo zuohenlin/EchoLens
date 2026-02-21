@@ -90,6 +90,57 @@
         </div>
       </div>
 
+      <!-- +++ 新增：上帝视角干预控制台 (Command Center) +++ -->
+      <div class="god-mode-panel" v-if="phase === 1 || runStatus.runner_status === 'paused'">
+        <div class="panel-header">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+          <span class="panel-title">上帝视角干预 (God Mode)</span>
+          <span class="status-indicator" :class="runStatus.runner_status">
+            {{ runStatus.runner_status === 'paused' ? '系统已暂停' : '系统运行中' }}
+          </span>
+        </div>
+
+        <div class="panel-body">
+          <div class="control-actions">
+            <!-- 暂停/恢复 按钮 -->
+            <button
+              class="god-btn"
+              :class="{ 'warning': runStatus.runner_status === 'running', 'success': runStatus.runner_status === 'paused' }"
+              @click="togglePauseResume"
+              :disabled="isToggling"
+            >
+              <span v-if="isToggling" class="loading-spinner-small black"></span>
+              {{ runStatus.runner_status === 'paused' ? '▶ 恢复演演' : '⏸ 暂停演演' }}
+            </button>
+          </div>
+
+          <!-- 突发事件注入表单 -->
+          <div class="inject-form">
+            <div class="input-group">
+              <input
+                v-model="injectEventContent"
+                type="text"
+                placeholder="在此输入突发热搜或竞品动作..."
+                :disabled="isInjecting"
+                @keyup.enter="handleInjectEvent"
+              />
+              <button
+                class="god-btn primary"
+                @click="handleInjectEvent"
+                :disabled="!injectEventContent.trim() || isInjecting"
+              >
+                <span v-if="isInjecting" class="loading-spinner-small"></span>
+                注入事件
+              </button>
+            </div>
+            <div class="form-hint">注入事件将立刻影响所有正在运行的Agent认知。</div>
+          </div>
+        </div>
+      </div>
+      <!-- +++ 结束新增 +++ -->
+
       <div class="action-controls">
         <button 
           class="action-btn primary"
@@ -103,10 +154,27 @@
       </div>
     </div>
 
-    <!-- Main Content: Dual Timeline -->
-    <div class="main-content-area" ref="scrollContainer">
-      <!-- Timeline Header -->
-      <div class="timeline-header" v-if="allActions.length > 0">
+    <!-- Main Content: Dual Timeline & Topology -->
+    <div class="main-content-area">
+      <!-- Left: Topology Graph -->
+      <div class="topology-section">
+        <div class="topology-header">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="5" r="3"></circle>
+            <circle cx="6" cy="12" r="3"></circle>
+            <circle cx="18" cy="19" r="3"></circle>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+          </svg>
+          <span>舆情传播动态拓扑图</span>
+        </div>
+        <div class="topology-container" ref="chartRef"></div>
+      </div>
+
+      <!-- Right: Timeline -->
+      <div class="timeline-section" ref="scrollContainer">
+        <!-- Timeline Header -->
+        <div class="timeline-header" v-if="allActions.length > 0">
         <div class="timeline-stats">
           <span class="total-count">TOTAL EVENTS: <span class="mono">{{ allActions.length }}</span></span>
           <span class="platform-breakdown">
@@ -268,6 +336,7 @@
         </div>
       </div>
     </div>
+    </div>
 
     <!-- Bottom Info / Logs -->
     <div class="system-logs">
@@ -286,26 +355,22 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
-import { 
-  startSimulation, 
+import * as echarts from 'echarts'
+import {
+  startSimulation,
   stopSimulation,
-  getRunStatus, 
-  getRunStatusDetail
+  getRunStatus,
+  getRunStatusDetail,
+  pauseSimulation,      // 新增
+  resumeSimulation,     // 新增
+  injectSimulationEvent // 新增
 } from '../api/simulation'
 import { generateReport } from '../api/report'
 
 const props = defineProps({
-  simulationId: String,
-  maxRounds: Number, // 从Step2传入的最大轮数
-  minutesPerRound: {
-    type: Number,
-    default: 30 // 默认每轮30分钟
-  },
-  projectData: Object,
-  graphData: Object,
-  systemLogs: Array
+// ... 保持原有 props 不变
 })
 
 const emit = defineEmits(['go-back', 'next-step', 'add-log', 'update-status'])
@@ -322,6 +387,12 @@ const runStatus = ref({})
 const allActions = ref([]) // 所有动作（增量累积）
 const actionIds = ref(new Set()) // 用于去重的动作ID集合
 const scrollContainer = ref(null)
+
+// --- 新增：上帝视角状态 ---
+const isToggling = ref(false) // 暂停/恢复请求中的状态
+const isInjecting = ref(false) // 注入事件请求中的状态
+const injectEventContent = ref('') // 注入事件的输入框内容
+// --------------------------
 
 // Computed
 // 按时间顺序显示动作（最新的在最后面，即底部）
@@ -534,24 +605,83 @@ const fetchRunStatus = async () => {
 const checkPlatformsCompleted = (data) => {
   // 如果没有任何平台数据，返回 false
   if (!data) return false
-  
+
   // 检查各平台的完成状态
   const twitterCompleted = data.twitter_completed === true
   const redditCompleted = data.reddit_completed === true
-  
+
   // 如果至少有一个平台完成了，检查是否所有启用的平台都完成了
   // 通过 actions_count 判断平台是否被启用（如果 count > 0 或 running 曾为 true）
   const twitterEnabled = (data.twitter_actions_count > 0) || data.twitter_running || twitterCompleted
   const redditEnabled = (data.reddit_actions_count > 0) || data.reddit_running || redditCompleted
-  
+
   // 如果没有任何平台被启用，返回 false
   if (!twitterEnabled && !redditEnabled) return false
-  
+
   // 检查所有启用的平台是否都已完成
   if (twitterEnabled && !twitterCompleted) return false
   if (redditEnabled && !redditCompleted) return false
-  
+
   return true
+}
+
+// ================== 新增：上帝视角干预逻辑 ==================
+
+const togglePauseResume = async () => {
+  if (!props.simulationId || isToggling.value) return
+
+  isToggling.value = true
+  const isCurrentlyPaused = runStatus.value.runner_status === 'paused'
+
+  try {
+    let res
+    if (isCurrentlyPaused) {
+      addLog('发送请求：恢复模拟运行...')
+      res = await resumeSimulation(props.simulationId)
+    } else {
+      addLog('发送请求：暂停模拟运行...')
+      res = await pauseSimulation(props.simulationId)
+    }
+
+    if (res.success) {
+      addLog(`✓ 模拟已${isCurrentlyPaused ? '恢复' : '暂停'}`)
+      // 立即在前端反映状态，不等下一次轮询
+      runStatus.value.runner_status = isCurrentlyPaused ? 'running' : 'paused'
+    } else {
+      addLog(`✗ 操作失败: ${res.error || '未知错误'}`)
+    }
+  } catch (err) {
+    addLog(`✗ 网络异常: ${err.message}`)
+  } finally {
+    isToggling.value = false
+  }
+}
+
+const handleInjectEvent = async () => {
+  const content = injectEventContent.value.trim()
+  if (!props.simulationId || !content || isInjecting.value) return
+
+  isInjecting.value = true
+  addLog(`发送请求：注入突发事件 "${content}"...`)
+
+  try {
+    const eventData = {
+      event_type: 'hot_topic', // 默认作为热门话题注入
+      content: content
+    }
+    const res = await injectSimulationEvent(props.simulationId, eventData)
+
+    if (res.success) {
+      addLog('✓ 突发事件注入成功，正在影响平行世界...')
+      injectEventContent.value = '' // 清空输入框
+    } else {
+      addLog(`✗ 事件注入失败: ${res.error || '未知错误'}`)
+    }
+  } catch (err) {
+    addLog(`✗ 网络异常: ${err.message}`)
+  } finally {
+    isInjecting.value = false
+  }
 }
 
 const fetchRunStatusDetail = async () => {
@@ -684,15 +814,191 @@ watch(() => props.systemLogs?.length, () => {
   })
 })
 
+// ================== 新增：ECharts 拓扑图逻辑 ==================
+const chartRef = ref(null)
+const chartInstance = shallowRef(null)
+
+const initChart = () => {
+  if (chartRef.value) {
+    chartInstance.value = echarts.init(chartRef.value)
+    updateChart()
+    
+    window.addEventListener('resize', handleResize)
+  }
+}
+
+const handleResize = () => {
+  if (chartInstance.value) {
+    chartInstance.value.resize()
+  }
+}
+
+const updateChart = () => {
+  if (!chartInstance.value) return
+
+  const nodes = []
+  const links = []
+  const nodeMap = new Map()
+
+  // 遍历所有动作，构建节点和连线
+  allActions.value.forEach(action => {
+    const agentId = action.agent_id
+    const agentName = action.agent_name || `Agent ${agentId}`
+    
+    // 记录节点
+    if (!nodeMap.has(agentId)) {
+      nodeMap.set(agentId, {
+        id: agentId,
+        name: agentName,
+        value: 1,
+        category: action.platform === 'twitter' ? 0 : 1,
+        symbolSize: 20
+      })
+    } else {
+      const node = nodeMap.get(agentId)
+      node.value += 1
+      // 节点大小随活跃度增加，最大50
+      node.symbolSize = Math.min(50, 20 + node.value * 2)
+    }
+
+    // 构建连线 (转发、引用、点赞、评论)
+    let targetName = null
+    let linkType = null
+    let linkColor = '#999'
+
+    if (action.action_type === 'REPOST' || action.action_type === 'QUOTE_POST') {
+      targetName = action.action_args?.original_author_name
+      linkType = 'repost'
+      linkColor = '#00FFAA' // 绿色表示传播
+    } else if (action.action_type === 'LIKE_POST' || action.action_type === 'UPVOTE_POST') {
+      targetName = action.action_args?.post_author_name
+      linkType = 'like'
+      linkColor = '#FF5555' // 红色表示点赞
+    } else if (action.action_type === 'CREATE_COMMENT') {
+      // 评论可能没有直接的 author name，如果有的话可以连线
+      // 这里简化处理，如果有 target_user 则连线
+      targetName = action.action_args?.target_user
+      linkType = 'comment'
+      linkColor = '#00AAFF' // 蓝色表示评论
+    }
+
+    if (targetName && targetName !== agentName) {
+      let targetId = `name_${targetName}`
+      // 尝试找到已存在的同名节点
+      for (const [id, node] of nodeMap.entries()) {
+        if (node.name === targetName) {
+          targetId = id
+          break
+        }
+      }
+      
+      if (!nodeMap.has(targetId)) {
+        nodeMap.set(targetId, {
+          id: targetId,
+          name: targetName,
+          value: 1,
+          category: 2, // 外部/被动节点
+          symbolSize: 15
+        })
+      }
+      
+      links.push({
+        source: agentId,
+        target: targetId,
+        lineStyle: { 
+          color: linkColor, 
+          width: linkType === 'repost' ? 2 : 1, 
+          type: linkType === 'like' ? 'dashed' : 'solid',
+          curveness: 0.2 + Math.random() * 0.1 // 随机曲率避免线重叠
+        }
+      })
+    }
+  })
+
+  nodes.push(...nodeMap.values())
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      formatter: function (params) {
+        if (params.dataType === 'node') {
+          return `${params.data.name}<br/>活跃度: ${params.data.value}`
+        }
+        return ''
+      }
+    },
+    legend: {
+      data: ['Info Plaza', 'Topic Community', 'External'],
+      bottom: 10,
+      textStyle: { color: '#666' }
+    },
+    series: [
+      {
+        type: 'graph',
+        layout: 'force',
+        data: nodes,
+        links: links,
+        categories: [
+          { name: 'Info Plaza', itemStyle: { color: '#1DA1F2' } },
+          { name: 'Topic Community', itemStyle: { color: '#FF4500' } },
+          { name: 'External', itemStyle: { color: '#999999' } }
+        ],
+        roam: true,
+        label: {
+          show: true,
+          position: 'right',
+          formatter: '{b}',
+          fontSize: 10,
+          color: '#666'
+        },
+        force: {
+          repulsion: 150,
+          edgeLength: 60,
+          gravity: 0.1
+        },
+        lineStyle: {
+          color: 'source',
+          curveness: 0.3
+        },
+        emphasis: {
+          focus: 'adjacency',
+          lineStyle: {
+            width: 4
+          }
+        }
+      }
+    ]
+  }
+
+  chartInstance.value.setOption(option)
+}
+
+// 监听动作数组变化，动态更新图表
+watch(allActions, () => {
+  if (chartInstance.value) {
+    updateChart()
+  }
+}, { deep: true })
+// ==========================================================
+
 onMounted(() => {
   addLog('Step3 模拟运行初始化')
   if (props.simulationId) {
     doStartSimulation()
   }
+  // 初始化图表
+  nextTick(() => {
+    initChart()
+  })
 })
 
 onUnmounted(() => {
   stopPolling()
+  if (chartInstance.value) {
+    window.removeEventListener('resize', handleResize)
+    chartInstance.value.dispose()
+  }
 })
 </script>
 
@@ -898,12 +1204,252 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
+/* --- God Mode Panel --- */
+.god-mode-panel {
+  background: rgba(10, 15, 30, 0.95);
+  border: 1px solid rgba(0, 255, 170, 0.3);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 0 16px;
+  box-shadow: 0 0 20px rgba(0, 255, 170, 0.1), inset 0 0 10px rgba(0, 255, 170, 0.05);
+  backdrop-filter: blur(10px);
+  color: #E0F7FA;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 350px;
+  position: relative;
+  overflow: hidden;
+}
+
+.god-mode-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #00FFAA, transparent);
+  animation: scanline 2s linear infinite;
+}
+
+@keyframes scanline {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid rgba(0, 255, 170, 0.2);
+  padding-bottom: 8px;
+}
+
+.panel-header svg {
+  color: #00FFAA;
+  filter: drop-shadow(0 0 5px #00FFAA);
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #00FFAA;
+  text-shadow: 0 0 8px rgba(0, 255, 170, 0.5);
+}
+
+.status-indicator {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.status-indicator.running {
+  background: rgba(0, 255, 170, 0.1);
+  color: #00FFAA;
+  border: 1px solid rgba(0, 255, 170, 0.3);
+  box-shadow: 0 0 10px rgba(0, 255, 170, 0.2);
+  animation: pulse-green 2s infinite;
+}
+
+.status-indicator.paused {
+  background: rgba(255, 85, 85, 0.1);
+  color: #FF5555;
+  border: 1px solid rgba(255, 85, 85, 0.3);
+  box-shadow: 0 0 10px rgba(255, 85, 85, 0.2);
+  animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-green {
+  0% { box-shadow: 0 0 0 0 rgba(0, 255, 170, 0.4); }
+  70% { box-shadow: 0 0 0 6px rgba(0, 255, 170, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 255, 170, 0); }
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(255, 85, 85, 0.4); }
+  70% { box-shadow: 0 0 0 6px rgba(255, 85, 85, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 85, 85, 0); }
+}
+
+.panel-body {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.control-actions {
+  flex-shrink: 0;
+}
+
+.god-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid transparent;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.god-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(100%);
+}
+
+.god-btn.warning {
+  background: rgba(255, 85, 85, 0.1);
+  color: #FF5555;
+  border-color: rgba(255, 85, 85, 0.5);
+}
+
+.god-btn.warning:hover:not(:disabled) {
+  background: rgba(255, 85, 85, 0.2);
+  box-shadow: 0 0 15px rgba(255, 85, 85, 0.3);
+}
+
+.god-btn.success {
+  background: rgba(0, 255, 170, 0.1);
+  color: #00FFAA;
+  border-color: rgba(0, 255, 170, 0.5);
+}
+
+.god-btn.success:hover:not(:disabled) {
+  background: rgba(0, 255, 170, 0.2);
+  box-shadow: 0 0 15px rgba(0, 255, 170, 0.3);
+}
+
+.god-btn.primary {
+  background: rgba(0, 170, 255, 0.1);
+  color: #00AAFF;
+  border-color: rgba(0, 170, 255, 0.5);
+}
+
+.god-btn.primary:hover:not(:disabled) {
+  background: rgba(0, 170, 255, 0.2);
+  box-shadow: 0 0 15px rgba(0, 170, 255, 0.3);
+}
+
+.inject-form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.input-group {
+  display: flex;
+  gap: 8px;
+}
+
+.input-group input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(0, 255, 170, 0.3);
+  border-radius: 4px;
+  padding: 8px 12px;
+  color: #00FFAA;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  transition: all 0.3s;
+}
+
+.input-group input:focus {
+  outline: none;
+  border-color: #00FFAA;
+  box-shadow: 0 0 10px rgba(0, 255, 170, 0.2);
+}
+
+.input-group input::placeholder {
+  color: rgba(0, 255, 170, 0.3);
+}
+
+.form-hint {
+  font-size: 10px;
+  color: rgba(224, 247, 250, 0.5);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.loading-spinner-small.black {
+  border-top-color: #000;
+}
+
 /* --- Main Content Area --- */
 .main-content-area {
   flex: 1;
+  display: flex;
+  overflow: hidden;
+  background: #FFF;
+}
+
+/* Topology Section */
+.topology-section {
+  flex: 1;
+  border-right: 1px solid #EAEAEA;
+  display: flex;
+  flex-direction: column;
+  background: #FAFAFA;
+  min-width: 400px;
+}
+
+.topology-header {
+  padding: 12px 24px;
+  border-bottom: 1px solid #EAEAEA;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #FFF;
+}
+
+.topology-container {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+}
+
+/* Timeline Section */
+.timeline-section {
+  flex: 1;
   overflow-y: auto;
   position: relative;
-  background: #FFF;
+  min-width: 400px;
 }
 
 /* Timeline Header */

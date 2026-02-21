@@ -1524,8 +1524,8 @@ def stop_simulation():
 
 # ============== 实时状态监控接口 ==============
 
-@simulation_bp.route('/<simulation_id>/run-status', methods=['GET'])
-def get_run_status(simulation_id: str):
+@simulation_bp.route('/<simulation_id>/run_state', methods=['GET'])
+def get_simulation_run_state(simulation_id: str):
     """
     获取模拟运行实时状态（用于前端轮询）
     
@@ -2331,21 +2331,18 @@ def interview_all_agents():
         }), 500
 
 
-@simulation_bp.route('/interview/history', methods=['POST'])
-def get_interview_history():
+@simulation_bp.route('/<simulation_id>/interview_history', methods=['GET'])
+def get_interview_history(simulation_id: str):
     """
     获取Interview历史记录
 
     从模拟数据库中读取所有Interview记录
 
-    请求（JSON）：
-        {
-            "simulation_id": "sim_xxxx",  // 必填，模拟ID
-            "platform": "reddit",          // 可选，平台类型（reddit/twitter）
+    Query参数：
+        platform: 平台类型（reddit/twitter）
                                            // 不指定则返回两个平台的所有历史
-            "agent_id": 0,                 // 可选，只获取该Agent的采访历史
-            "limit": 100                   // 可选，返回数量，默认100
-        }
+        agent_id: 可选，只获取该Agent的采访历史
+        limit: 返回数量，默认100
 
     返回：
         {
@@ -2366,13 +2363,10 @@ def get_interview_history():
         }
     """
     try:
-        data = request.get_json() or {}
-        
-        simulation_id = data.get('simulation_id')
-        platform = data.get('platform')  # 不指定则返回两个平台的历史
-        agent_id = data.get('agent_id')
-        limit = data.get('limit', 100)
-        
+        platform = request.args.get('platform')  # 不指定则返回两个平台的历史
+        agent_id = request.args.get('agent_id', type=int)
+        limit = request.args.get('limit', 100, type=int)
+
         if not simulation_id:
             return jsonify({
                 "success": False,
@@ -2536,3 +2530,84 @@ def close_simulation_env():
             "error": str(e),
             "traceback": traceback.format_exc()
         }), 500
+
+# ============== 上帝视角干预接口 ==============
+
+@simulation_bp.route('/<simulation_id>/pause', methods=['POST'])
+def pause_simulation(simulation_id: str):
+    """暂停模拟运行"""
+    try:
+        run_state = SimulationRunner.pause_simulation(simulation_id)
+
+        # 同步更新 SimulationManager 状态
+        manager = SimulationManager()
+        state = manager.get_simulation(simulation_id)
+        if state:
+            state.status = SimulationStatus.PAUSED
+            manager._save_simulation_state(state)
+
+        return jsonify({"success": True, "data": run_state.to_dict()})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"暂停模拟失败: {str(e)}")
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
+
+@simulation_bp.route('/<simulation_id>/resume', methods=['POST'])
+def resume_simulation(simulation_id: str):
+    """恢复模拟运行"""
+    try:
+        run_state = SimulationRunner.resume_simulation(simulation_id)
+
+        # 同步更新 SimulationManager 状态
+        manager = SimulationManager()
+        state = manager.get_simulation(simulation_id)
+        if state:
+            state.status = SimulationStatus.RUNNING
+            manager._save_simulation_state(state)
+
+        return jsonify({"success": True, "data": run_state.to_dict()})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"恢复模拟失败: {str(e)}")
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
+
+@simulation_bp.route('/<simulation_id>/inject_event', methods=['POST'])
+def inject_simulation_event(simulation_id: str):
+    """向运行中的模拟注入事件"""
+    try:
+        event_data = request.get_json()
+        if not event_data:
+            return jsonify({"success": False, "error": "请提供事件数据"}), 400
+
+        result = SimulationRunner.inject_simulation_event(simulation_id, event_data)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"注入事件失败: {str(e)}")
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
+
+@simulation_bp.route('/<simulation_id>/update_agent_param', methods=['POST'])
+def update_agent_parameter(simulation_id: str):
+    """向运行中的模拟更新Agent参数"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "请提供更新数据"}), 400
+
+        agent_id = data.get('agent_id')
+        param_name = data.get('param_name')
+        param_value = data.get('param_value')
+
+        if agent_id is None or param_name is None or param_value is None:
+            return jsonify({"success": False, "error": "缺少必要参数：agent_id, param_name, param_value"}), 400
+
+        result = SimulationRunner.update_agent_parameter(simulation_id, agent_id, param_name, param_value)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"更新Agent参数失败: {str(e)}")
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500

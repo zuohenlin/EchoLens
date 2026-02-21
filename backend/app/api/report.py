@@ -350,6 +350,77 @@ def get_report_by_simulation(simulation_id: str):
         }), 500
 
 
+@report_bp.route('/<report_id>/metrics', methods=['GET'])
+def get_report_metrics(report_id: str):
+    """
+    获取报告的商业量化指标
+    
+    返回：
+        {
+            "success": true,
+            "data": {
+                "estimated_exposure": "120万+",
+                "conversion_intent_rate": "8.5%",
+                "saved_pr_cost_wan": "15.5",
+                "estimated_roi": "1:3.5",
+                "sentiment_positive_rate": "65%",
+                "sentiment_negative_rate": "12%"
+            }
+        }
+    """
+    try:
+        metrics = ReportManager.get_report_metrics(report_id)
+        
+        if not metrics:
+            return jsonify({
+                "success": False,
+                "error": f"报告不存在或无指标: {report_id}"
+            }), 404
+            
+        return jsonify({
+            "success": True,
+            "data": metrics
+        })
+        
+    except Exception as e:
+        logger.error(f"获取报告指标失败: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@report_bp.route('/<report_id>/metrics/export', methods=['GET'])
+def export_report_metrics(report_id: str):
+    """
+    导出报告的商业量化指标为 CSV
+    """
+    try:
+        csv_data = ReportManager.export_report_metrics_to_csv(report_id)
+        
+        if not csv_data:
+            return jsonify({
+                "success": False,
+                "error": f"报告不存在或无指标: {report_id}"
+            }), 404
+            
+        from flask import Response
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-disposition": f"attachment; filename=metrics_{report_id}.csv"}
+        )
+        
+    except Exception as e:
+        logger.error(f"导出报告指标失败: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 @report_bp.route('/list', methods=['GET'])
 def list_reports():
     """

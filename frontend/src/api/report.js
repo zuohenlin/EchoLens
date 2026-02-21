@@ -43,6 +43,14 @@ export const getReport = (reportId) => {
 }
 
 /**
+ * 获取报告商业量化指标
+ * @param {string} reportId
+ */
+export const getReportMetrics = (reportId) => {
+  return service.get(`/api/report/${reportId}/metrics`)
+}
+
+/**
  * 与 Report Agent 对话
  * @param {Object} data - { simulation_id, message, chat_history? }
  */

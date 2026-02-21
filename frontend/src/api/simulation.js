@@ -97,7 +97,7 @@ export const stopSimulation = (data) => {
  * @param {string} simulationId
  */
 export const getRunStatus = (simulationId) => {
-  return service.get(`/api/simulation/${simulationId}/run-status`)
+  return service.get(`/api/simulation/${simulationId}/run_state`) // 注意：后端路由已改为 run_state
 }
 
 /**
@@ -108,9 +108,48 @@ export const getRunStatusDetail = (simulationId) => {
   return service.get(`/api/simulation/${simulationId}/run-status/detail`)
 }
 
+// ================== 上帝视角干预接口 ==================
+
+/**
+ * 暂停运行中的模拟
+ * @param {string} simulationId
+ */
+export const pauseSimulation = (simulationId) => {
+  return service.post(`/api/simulation/${simulationId}/pause`)
+}
+
+/**
+ * 恢复暂停的模拟
+ * @param {string} simulationId
+ */
+export const resumeSimulation = (simulationId) => {
+  return service.post(`/api/simulation/${simulationId}/resume`)
+}
+
+/**
+ * 向运行中的模拟注入事件
+ * @param {string} simulationId
+ * @param {Object} eventData - 事件内容，例如 { event_type: 'hot_topic', content: '...' }
+ */
+export const injectSimulationEvent = (simulationId, eventData) => {
+  return service.post(`/api/simulation/${simulationId}/inject_event`, eventData)
+}
+
+/**
+ * 更新指定Agent的参数
+ * @param {string} simulationId
+ * @param {Object} data - { agent_id: Number, param_name: String, param_value: Any }
+ */
+export const updateAgentParameter = (simulationId, data) => {
+  return service.post(`/api/simulation/${simulationId}/update_agent_param`, data)
+}
+
+// ======================================================
+
 /**
  * 获取模拟中的帖子
  * @param {string} simulationId
+
  * @param {string} platform - 'reddit' | 'twitter'
  * @param {number} limit - 返回数量
  * @param {number} offset - 偏移量

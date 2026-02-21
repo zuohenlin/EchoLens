@@ -16,6 +16,52 @@
             <div class="header-divider"></div>
           </div>
 
+          <!-- +++ 新增：商业量化指标仪表盘 (Business Metrics Dashboard) +++ -->
+          <div class="business-dashboard" v-if="reportMetrics && Object.keys(reportMetrics).length > 0">
+            <div class="dashboard-header">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 3v18h18"></path>
+                <path d="M18 17V9"></path>
+                <path d="M13 17V5"></path>
+                <path d="M8 17v-3"></path>
+              </svg>
+              <span>核心商业指标预测 (Business Metrics)</span>
+            </div>
+            <div class="metrics-grid">
+              <div class="metric-card highlight">
+                <div class="metric-title">预估总曝光量</div>
+                <div class="metric-value">{{ reportMetrics.estimated_exposure || 'N/A' }}</div>
+                <div class="metric-trend positive">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                  <span>基于百万级Agent推演</span>
+                </div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-title">种草/转化意向率</div>
+                <div class="metric-value">{{ reportMetrics.conversion_intent_rate || 'N/A' }}</div>
+                <div class="metric-trend">
+                  <span>目标受众转化预估</span>
+                </div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-title">潜在公关成本节省</div>
+                <div class="metric-value">{{ reportMetrics.saved_pr_cost_wan ? `约 ${reportMetrics.saved_pr_cost_wan} 万元` : 'N/A' }}</div>
+                <div class="metric-trend positive">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                  <span>基于早期风险识别</span>
+                </div>
+              </div>
+              <div class="metric-card highlight-alt">
+                <div class="metric-title">综合营销 ROI 预估</div>
+                <div class="metric-value">{{ reportMetrics.estimated_roi || 'N/A' }}</div>
+                <div class="metric-trend">
+                  <span>投资回报率预测</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- +++ 结束新增 +++ -->
+
           <!-- Sections List -->
           <div class="sections-list">
             <div 
@@ -394,7 +440,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, h, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { getAgentLog, getConsoleLog } from '../api/report'
+import { getAgentLog, getConsoleLog, getReport, getReportMetrics } from '../api/report'
 
 const router = useRouter()
 
@@ -425,6 +471,7 @@ const expandedContent = ref(new Set())
 const expandedLogs = ref(new Set())
 const collapsedSections = ref(new Set())
 const isComplete = ref(false)
+const reportMetrics = ref(null) // 新增：存储商业量化指标
 const startTime = ref(null)
 const leftPanel = ref(null)
 const rightPanel = ref(null)
@@ -2001,6 +2048,7 @@ const fetchAgentLog = async () => {
             currentSectionIndex.value = null  // 确保清除 loading 状态
             emit('update-status', 'completed')
             stopPolling()
+            fetchReportMetrics() // 获取商业量化指标
             // 滚动逻辑统一在循环结束后的 nextTick 中处理
           }
           
@@ -2095,6 +2143,18 @@ const fetchConsoleLog = async () => {
     }
   } catch (err) {
     console.warn('Failed to fetch console log:', err)
+  }
+}
+
+const fetchReportMetrics = async () => {
+  if (!props.reportId) return
+  try {
+    const res = await getReportMetrics(props.reportId)
+    if (res.success && res.data) {
+      reportMetrics.value = res.data
+    }
+  } catch (err) {
+    console.warn('Failed to fetch report metrics:', err)
   }
 }
 
@@ -2238,6 +2298,96 @@ watch(() => props.reportId, (newId) => {
   background: #FAFAFA;
   border-color: #1F2937;
 }
+
+/* --- Business Metrics Dashboard --- */
+.business-dashboard {
+  margin-bottom: 32px;
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #F9FAFB;
+  border-bottom: 1px solid #E5E7EB;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dashboard-header svg {
+  color: #4F46E5;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1px;
+  background: #E5E7EB;
+}
+
+.metric-card {
+  background: #FFFFFF;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.metric-card:hover {
+  background: #F9FAFB;
+}
+
+.metric-card.highlight {
+  background: linear-gradient(to bottom right, #FFFFFF, #EEF2FF);
+}
+
+.metric-card.highlight-alt {
+  background: linear-gradient(to bottom right, #FFFFFF, #ECFDF5);
+}
+
+.metric-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metric-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #111827;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.2;
+}
+
+.metric-trend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #9CA3AF;
+  font-weight: 500;
+}
+
+.metric-trend.positive {
+  color: #059669;
+}
+
+.metric-trend svg {
+  flex-shrink: 0;
+}
+/* ---------------------------------- */
 
 .panel-header--active .header-index {
   color: #1F2937;
