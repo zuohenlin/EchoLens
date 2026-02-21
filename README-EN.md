@@ -29,8 +29,9 @@
 
 - 🎯 **Opinion Preview**: Predict consumer reactions before product launch
 - 🔍 **Risk Detection**: Identify potential PR risks in marketing campaigns
-- 📊 **Propagation Analysis**: Track information spread across social networks
+- 📊 **Business Quantification (New)**: Powered by the newly introduced `Business Metrics Engine`, translating fuzzy sentiments into hard metrics like "Estimated ROI", "Conversion Intent Rate", and "Saved PR Cost".
 - 💬 **Deep Interaction**: Chat with any Agent in the simulation world
+- ⚡ **God View (New)**: Pioneering real-time sandbox intervention system. Supports [Pause] and [Inject Event] at any time during simulation, panoramically displaying the real-time deformation of dynamic public opinion topology networks.
 
 ---
 
