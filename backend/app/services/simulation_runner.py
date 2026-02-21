@@ -99,32 +99,36 @@ class SimulationRunState:
     """模拟运行状态（实时）"""
     simulation_id: str
     runner_status: RunnerStatus = RunnerStatus.IDLE
-    
+
     # 进度信息
     current_round: int = 0
     total_rounds: int = 0
     simulated_hours: int = 0
     total_simulation_hours: int = 0
-    
+
     # 各平台独立轮次和模拟时间（用于双平台并行显示）
     twitter_current_round: int = 0
     reddit_current_round: int = 0
     twitter_simulated_hours: int = 0
     reddit_simulated_hours: int = 0
-    
+
     # 平台状态
     twitter_running: bool = False
     reddit_running: bool = False
     twitter_actions_count: int = 0
     reddit_actions_count: int = 0
-    
+
     # 平台完成状态（通过检测 actions.jsonl 中的 simulation_end 事件）
     twitter_completed: bool = False
     reddit_completed: bool = False
-    
+
+    # IPC 控制标志
+    pause_requested: bool = False
+    resume_requested: bool = False
+
     # 每轮摘要
     rounds: List[RoundSummary] = field(default_factory=list)
-    
+
     # 最近动作（用于前端实时展示）
     recent_actions: List[AgentAction] = field(default_factory=list)
     max_recent_actions: int = 50
@@ -474,39 +478,107 @@ class SimulationRunner:
     @classmethod
     def _monitor_simulation(cls, simulation_id: str):
         """监控模拟进程，解析动作日志"""
+        from .simulation_ipc import SimulationIPCServer, CommandType, CommandStatus # 导入IPC Server和命令类型
+
         sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
-        
+
         # 新的日志结构：分平台的动作日志
         twitter_actions_log = os.path.join(sim_dir, "twitter", "actions.jsonl")
         reddit_actions_log = os.path.join(sim_dir, "reddit", "actions.jsonl")
-        
+
         process = cls._processes.get(simulation_id)
         state = cls.get_run_state(simulation_id)
-        
+
         if not process or not state:
             return
-        
+
+        ipc_server = SimulationIPCServer(sim_dir) # 实例化IPC Server
+        ipc_server.start() # 标记IPC服务器为运行状态
+        logger.info(f"IPC Server 已启动，用于监控模拟: {simulation_id}")
+
         twitter_position = 0
         reddit_position = 0
-        
+
         try:
             while process.poll() is None:  # 进程仍在运行
+                # ========== 处理IPC命令 ==========
+                command = ipc_server.poll_commands()
+                if command:
+                    response_result = {}
+                    response_error = None
+                    try:
+                        if command.command_type == CommandType.PAUSE_SIMULATION:
+                            logger.info(f"IPC命令：暂停模拟 {simulation_id}")
+                            state.pause_requested = True
+                            state.resume_requested = False
+                            state.runner_status = RunnerStatus.PAUSED
+                            cls._save_run_state(state)
+                            response_result = {"message": "模拟已请求暂停"}
+                        elif command.command_type == CommandType.RESUME_SIMULATION:
+                            logger.info(f"IPC命令：恢复模拟 {simulation_id}")
+                            state.resume_requested = True
+                            state.pause_requested = False
+                            state.runner_status = RunnerStatus.RUNNING
+                            cls._save_run_state(state)
+                            response_result = {"message": "模拟已请求恢复"}
+                        # TODO: 处理 INJECT_EVENT 和 UPDATE_AGENT_PARAM 命令
+                        else:
+                            response_error = f"未知IPC命令: {command.command_type.value}"
+                    except Exception as e:
+                        logger.error(f"处理IPC命令失败: {e}")
+                        response_error = str(e)
+
+                    if response_error:
+                        ipc_server.send_error(command.command_id, response_error)
+                    else:
+                        ipc_server.send_success(command.command_id, response_result)
+
+                # ========== 暂停/恢复逻辑 ==========
+                if state.pause_requested and not state.resume_requested:
+                    if state.runner_status != RunnerStatus.PAUSED: # 避免重复打印
+                        state.runner_status = RunnerStatus.PAUSED
+                        cls._save_run_state(state)
+                        logger.info(f"模拟 {simulation_id} 已进入暂停状态。")
+
+                    # 等待恢复命令
+                    while state.pause_requested and not state.resume_requested:
+                        # 再次轮询IPC命令，以便在暂停期间接收恢复命令
+                        command_during_pause = ipc_server.poll_commands()
+                        if command_during_pause:
+                            if command_during_pause.command_type == CommandType.RESUME_SIMULATION:
+                                logger.info(f"IPC命令：恢复模拟 {simulation_id} (暂停期间)")
+                                state.resume_requested = True
+                                state.pause_requested = False
+                                state.runner_status = RunnerStatus.RUNNING
+                                cls._save_run_state(state)
+                                ipc_server.send_success(command_during_pause.command_id, {"message": "模拟已请求恢复"})
+                                break # 退出暂停等待循环
+                            else:
+                                # 其他命令在暂停期间不处理，或者根据需求处理
+                                ipc_server.send_error(command_during_pause.command_id, f"模拟暂停中，无法处理命令 {command_during_pause.command_type.value}")
+                        time.sleep(1) # 短暂等待
+
+                    if state.resume_requested:
+                        logger.info(f"模拟 {simulation_id} 已恢复运行。")
+                        state.resume_requested = False # 重置标志
+
+                # ========== 读取动作日志 ==========
                 # 读取 Twitter 动作日志
                 if os.path.exists(twitter_actions_log):
                     twitter_position = cls._read_action_log(
                         twitter_actions_log, twitter_position, state, "twitter"
                     )
-                
+
                 # 读取 Reddit 动作日志
                 if os.path.exists(reddit_actions_log):
                     reddit_position = cls._read_action_log(
                         reddit_actions_log, reddit_position, state, "reddit"
                     )
-                
+
                 # 更新状态
                 cls._save_run_state(state)
                 time.sleep(2)
-            
+
             # 进程结束后，最后读取一次日志
             if os.path.exists(twitter_actions_log):
                 cls._read_action_log(twitter_actions_log, twitter_position, state, "twitter")
@@ -1600,6 +1672,202 @@ class SimulationRunner:
                 "message": "环境关闭命令已发送（等待响应超时，环境可能正在关闭）"
             }
     
+    @classmethod
+    def close_simulation_env(
+        cls,
+        simulation_id: str,
+        timeout: float = 30.0
+    ) -> Dict[str, Any]:
+        """
+        关闭模拟环境（而不是停止模拟进程）
+
+        向模拟发送关闭环境命令，使其优雅退出等待命令模式
+
+        Args:
+            simulation_id: 模拟ID
+            timeout: 超时时间（秒）
+
+        Returns:
+            操作结果字典
+        """
+        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+        if not os.path.exists(sim_dir):
+            raise ValueError(f"模拟不存在: {simulation_id}")
+
+        ipc_client = SimulationIPCClient(sim_dir)
+
+        if not ipc_client.check_env_alive():
+            return {
+                "success": True,
+                "message": "环境已经关闭"
+            }
+
+        logger.info(f"发送关闭环境命令: simulation_id={simulation_id}")
+
+        try:
+            response = ipc_client.send_close_env(timeout=timeout)
+
+            return {
+                "success": response.status.value == "completed",
+                "message": "环境关闭命令已发送",
+                "result": response.result,
+                "timestamp": response.timestamp
+            }
+        except TimeoutError:
+            # 超时可能是因为环境正在关闭
+            return {
+                "success": True,
+                "message": "环境关闭命令已发送（等待响应超时，环境可能正在关闭）"
+            }
+
+    @classmethod
+    def pause_simulation(cls, simulation_id: str, timeout: float = 30.0) -> SimulationRunState:
+        """
+        暂停模拟
+
+        Args:
+            simulation_id: 模拟ID
+            timeout: 超时时间（秒）
+
+        Returns:
+            SimulationRunState
+
+        Raises:
+            ValueError: 模拟不存在或未在运行
+            TimeoutError: 等待响应超时
+        """
+        state = cls.get_run_state(simulation_id)
+        if not state:
+            raise ValueError(f"模拟不存在: {simulation_id}")
+
+        if state.runner_status != RunnerStatus.RUNNING:
+            raise ValueError(f"模拟未在运行，无法暂停: {simulation_id}, 当前状态={state.runner_status.value}")
+
+        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+        ipc_client = SimulationIPCClient(sim_dir)
+
+        logger.info(f"发送暂停命令: simulation_id={simulation_id}")
+        response = ipc_client.send_pause_simulation(timeout=timeout)
+
+        if response.status == CommandStatus.COMPLETED:
+            state.runner_status = RunnerStatus.PAUSED
+            cls._save_run_state(state)
+            logger.info(f"模拟已暂停: {simulation_id}")
+            return state
+        else:
+            raise RuntimeError(f"暂停命令执行失败: {response.error}")
+
+    @classmethod
+    def resume_simulation(cls, simulation_id: str, timeout: float = 30.0) -> SimulationRunState:
+        """
+        恢复模拟
+
+        Args:
+            simulation_id: 模拟ID
+            timeout: 超时时间（秒）
+
+        Returns:
+            SimulationRunState
+
+        Raises:
+            ValueError: 模拟不存在或未暂停
+            TimeoutError: 等待响应超时
+        """
+        state = cls.get_run_state(simulation_id)
+        if not state:
+            raise ValueError(f"模拟不存在: {simulation_id}")
+
+        if state.runner_status != RunnerStatus.PAUSED:
+            raise ValueError(f"模拟未暂停，无法恢复: {simulation_id}, 当前状态={state.runner_status.value}")
+
+        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+        ipc_client = SimulationIPCClient(sim_dir)
+
+        logger.info(f"发送恢复命令: simulation_id={simulation_id}")
+        response = ipc_client.send_resume_simulation(timeout=timeout)
+
+        if response.status == CommandStatus.COMPLETED:
+            state.runner_status = RunnerStatus.RUNNING
+            cls._save_run_state(state)
+            logger.info(f"模拟已恢复: {simulation_id}")
+            return state
+        else:
+            raise RuntimeError(f"恢复命令执行失败: {response.error}")
+
+    @classmethod
+    def inject_simulation_event(cls, simulation_id: str, event_data: Dict[str, Any], timeout: float = 60.0) -> Dict[str, Any]:
+        """
+        向运行中的模拟注入事件
+
+        Args:
+            simulation_id: 模拟ID
+            event_data: 事件数据，包含事件类型、内容等
+            timeout: 超时时间（秒）
+
+        Returns:
+            操作结果字典
+
+        Raises:
+            ValueError: 模拟不存在或未在运行
+            TimeoutError: 等待响应超时
+        """
+        state = cls.get_run_state(simulation_id)
+        if not state or state.runner_status not in [RunnerStatus.RUNNING, RunnerStatus.PAUSED]:
+            raise ValueError(f"模拟未在运行或已暂停，无法注入事件: {simulation_id}, 当前状态={state.runner_status.value}")
+
+        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+        ipc_client = SimulationIPCClient(sim_dir)
+
+        logger.info(f"发送注入事件命令: simulation_id={simulation_id}, event_type={event_data.get('event_type')}")
+        response = ipc_client.send_inject_event(event_data=event_data, timeout=timeout)
+
+        if response.status == CommandStatus.COMPLETED:
+            return {
+                "success": True,
+                "message": "事件注入成功",
+                "result": response.result
+            }
+        else:
+            raise RuntimeError(f"注入事件命令执行失败: {response.error}")
+
+    @classmethod
+    def update_agent_parameter(cls, simulation_id: str, agent_id: int, param_name: str, param_value: Any, timeout: float = 60.0) -> Dict[str, Any]:
+        """
+        向运行中的模拟更新Agent参数
+
+        Args:
+            simulation_id: 模拟ID
+            agent_id: Agent ID
+            param_name: 参数名称
+            param_value: 参数值
+            timeout: 超时时间（秒）
+
+        Returns:
+            操作结果字典
+
+        Raises:
+            ValueError: 模拟不存在或未在运行
+            TimeoutError: 等待响应超时
+        """
+        state = cls.get_run_state(simulation_id)
+        if not state or state.runner_status not in [RunnerStatus.RUNNING, RunnerStatus.PAUSED]:
+            raise ValueError(f"模拟未在运行或已暂停，无法更新Agent参数: {simulation_id}, 当前状态={state.runner_status.value}")
+
+        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+        ipc_client = SimulationIPCClient(sim_dir)
+
+        logger.info(f"发送更新Agent参数命令: simulation_id={simulation_id}, agent_id={agent_id}, param={param_name}, value={param_value}")
+        response = ipc_client.send_update_agent_param(agent_id=agent_id, param_name=param_name, param_value=param_value, timeout=timeout)
+
+        if response.status == CommandStatus.COMPLETED:
+            return {
+                "success": True,
+                "message": "Agent参数更新成功",
+                "result": response.result
+            }
+        else:
+            raise RuntimeError(f"更新Agent参数命令执行失败: {response.error}")
+
     @classmethod
     def _get_interview_history_from_db(
         cls,
