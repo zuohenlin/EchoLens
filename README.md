@@ -287,7 +287,7 @@ EchoLens/
 
 ## 📬 更多交流
 
-如有问题或建议，欢迎提交 [Issue](https://github.com/zuohenlin/EchoLens/issues)。
+如有问题或建议，欢迎提交 [Issue](https://github.com/fulaoaz/EchoLens/issues)。
 
 ---
 
@@ -302,6 +302,6 @@ EchoLens/
 
 ## 📈 项目统计
 
-[![GitHub Stars](https://img.shields.io/github/stars/zuohenlin/EchoLens?style=flat-square)](https://github.com/zuohenlin/EchoLens/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/zuohenlin/EchoLens?style=flat-square)](https://github.com/zuohenlin/EchoLens/network)
-[![GitHub Issues](https://img.shields.io/github/issues/zuohenlin/EchoLens?style=flat-square)](https://github.com/zuohenlin/EchoLens/issues)
+[![GitHub Stars](https://img.shields.io/github/stars/fulaoaz/EchoLens?style=flat-square)](https://github.com/fulaoaz/EchoLens/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/fulaoaz/EchoLens?style=flat-square)](https://github.com/fulaoaz/EchoLens/network)
+[![GitHub Issues](https://img.shields.io/github/issues/fulaoaz/EchoLens?style=flat-square)](https://github.com/fulaoaz/EchoLens/issues)

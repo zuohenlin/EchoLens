@@ -240,7 +240,7 @@ Built upon these open-source projects:
 
 ## 📬 Contact
 
-Questions or suggestions? Submit an [Issue](https://github.com/zuohenlin/EchoLens/issues).
+Questions or suggestions? Submit an [Issue](https://github.com/fulaoaz/EchoLens/issues).
 
 ---
 
@@ -254,6 +254,6 @@ Questions or suggestions? Submit an [Issue](https://github.com/zuohenlin/EchoLen
 
 ## 📈 Statistics
 
-[![GitHub Stars](https://img.shields.io/github/stars/zuohenlin/EchoLens?style=flat-square)](https://github.com/zuohenlin/EchoLens/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/zuohenlin/EchoLens?style=flat-square)](https://github.com/zuohenlin/EchoLens/network)
-[![GitHub Issues](https://img.shields.io/github/issues/zuohenlin/EchoLens?style=flat-square)](https://github.com/zuohenlin/EchoLens/issues)
+[![GitHub Stars](https://img.shields.io/github/stars/fulaoaz/EchoLens?style=flat-square)](https://github.com/fulaoaz/EchoLens/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/fulaoaz/EchoLens?style=flat-square)](https://github.com/fulaoaz/EchoLens/network)
+[![GitHub Issues](https://img.shields.io/github/issues/fulaoaz/EchoLens?style=flat-square)](https://github.com/fulaoaz/EchoLens/issues)

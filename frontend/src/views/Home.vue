@@ -4,7 +4,7 @@
     <nav class="navbar">
       <div class="nav-brand">ECHOLENS</div>
       <div class="nav-links">
-        <a href="https://github.com/zuohenlin/EchoLens" target="_blank" class="github-link">
+        <a href="https://github.com/fulaoaz/EchoLens" target="_blank" class="github-link">
           Github主页 <span class="arrow">↗</span>
         </a>
         <span class="nav-divider">|</span>

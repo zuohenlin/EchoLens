@@ -1,7 +1,7 @@
 services:
   echolens-insight:
     # 预构建镜像（推荐）：由 GitHub Actions 自动构建并推送到 GHCR
-    image: ghcr.io/zuohenlin/echolens-insight:latest
+    image: ghcr.io/fulaoaz/echolens-insight:latest
     # 本地构建（可选，代码有大改动时使用）：
     # build: ./third_party/EchoLens-Insight
     container_name: echolens-insight
